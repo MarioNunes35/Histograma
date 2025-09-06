@@ -1,11 +1,11 @@
-# Streamlit – Histogramas (com KDE, ECDF, agrupamento e controles finos)
-# Author: ChatGPT (GPT-5 Thinking)
+# Streamlit — Histogramas (com KDE, ECDF, agrupamento e controles finos)
+# Fixed version to resolve ValueError in histnorm parameter
 # Descrição:
 #   App para criar histogramas de forma flexível:
-#   • Bins: Auto (Freedman–Diaconis), Sturges, Scott, Doane, Rice, √N, largura fixa ou nº de bins.
+#   • Bins: Auto (Freedman—Diaconis), Sturges, Scott, Doane, Rice, √N, largura fixa ou nº de bins.
 #   • Normalização: contagem, frequência, densidade (PDF), probabilidade (%).
 #   • Cumulativo opcional; orientação vertical/horizontal; eixos log.
-#   • Agrupamento por categoria ou por arquivo (múltiplos CSVs) – modo sobreposto/empilhado/agrupado.
+#   • Agrupamento por categoria ou por arquivo (múltiplos CSVs) — modo sobreposto/empilhado/agrupado.
 #   • Suavização opcional via KDE (gaussian_kde) por grupo; ECDF opcional.
 #   • Tratamento de outliers: recorte por quantis ou winsorização; faixa manual.
 #   • Exporta dados processados, tabela de bins/contagens e figura HTML/PNG.
@@ -91,14 +91,23 @@ q_high = st.sidebar.slider("Quantil superior", 0.8, 1.0, 0.99)
 # Binning
 st.sidebar.header("Bins")
 bin_strategy = st.sidebar.selectbox("Estratégia", [
-    "Auto (Freedman–Diaconis)", "Sturges", "Scott", "Doane", "Rice", "√N", "Largura fixa", "Número de bins"
+    "Auto (Freedman—Diaconis)", "Sturges", "Scott", "Doane", "Rice", "√N", "Largura fixa", "Número de bins"
 ])
 bin_width = st.sidebar.number_input("Largura (se aplicável)", value=1.0, min_value=1e-9, step=0.1, format="%.6f")
 nbins = st.sidebar.number_input("# bins (se aplicável)", value=30, min_value=1, step=1)
 
 # Normalização e plot
 st.sidebar.header("Plotagem & estilo")
-histnorm = st.sidebar.selectbox("Normalização", ["count", "probability", "percent", "density"], index=0)
+# Fixed: Use only valid histnorm values and ensure they are strings
+histnorm_options = {
+    "Contagem": "",  # Empty string means no normalization (count)
+    "Probabilidade": "probability", 
+    "Porcentagem": "percent", 
+    "Densidade": "density"
+}
+histnorm_display = st.sidebar.selectbox("Normalização", list(histnorm_options.keys()), index=0)
+histnorm = histnorm_options[histnorm_display]
+
 barmode = st.sidebar.selectbox("Modo quando houver grupos", ["overlay", "stack", "group"], index=0)
 orientation = st.sidebar.selectbox("Orientação", ["vertical", "horizontal"], index=0)
 cumulative = st.sidebar.checkbox("Cumulativo", value=False)
@@ -183,7 +192,7 @@ def compute_bins(x: np.ndarray, strategy: str, nbins_user: int, width_user: floa
     xmax = float(np.max(x)) if vmax is None else float(vmax)
     if xmax <= xmin:
         xmax = xmin + 1.0
-    if strategy == "Auto (Freedman–Diaconis)":
+    if strategy == "Auto (Freedman—Diaconis)":
         h, k, _, _ = freedman_diaconis_bins(x)
         size = h
         start = xmin
@@ -244,27 +253,45 @@ xbins = compute_bins(work[col_value].to_numpy().astype(float), bin_strategy, int
 
 for i, gname in enumerate(groups):
     data = work.loc[work["__grp__"] == gname, col_value].astype(float).to_numpy()
-    # Histograma
-    fig.add_trace(go.Histogram(
-        x=None if orientation == "horizontal" else data,
-        y=data if orientation == "horizontal" else None,
-        xbins=xbins if orientation == "vertical" else None,
-        ybins=xbins if orientation == "horizontal" else None,
-        histnorm=histnorm,
-        name=str(gname) if gname != "_all_" else "dados",
-        opacity=opacity,
-        cumulative_enabled=cumulative,
-        nbinsx=None if orientation == "vertical" else None,
-        nbinsy=None if orientation == "horizontal" else None,
-    ))
+    
+    # Create histogram trace with proper parameters
+    hist_kwargs = {
+        'name': str(gname) if gname != "_all_" else "dados",
+        'opacity': opacity,
+    }
+    
+    # Add orientation-specific parameters
+    if orientation == "horizontal":
+        hist_kwargs['y'] = data
+        hist_kwargs['ybins'] = xbins
+    else:
+        hist_kwargs['x'] = data
+        hist_kwargs['xbins'] = xbins
+    
+    # Add normalization only if it's not empty
+    if histnorm:
+        hist_kwargs['histnorm'] = histnorm
+    
+    # Add cumulative if enabled
+    if cumulative:
+        hist_kwargs['cumulative_enabled'] = True
+    
+    fig.add_trace(go.Histogram(**hist_kwargs))
 
 # Layout geral
+y_axis_title = {
+    "": "Contagem",
+    "probability": "Probabilidade", 
+    "percent": "Porcentagem (%)", 
+    "density": "Densidade"
+}
+
 if orientation == "vertical":
     fig.update_xaxes(title_text=col_value, type='log' if logx else 'linear')
-    fig.update_yaxes(title_text={"count":"Contagem","probability":"Prob","percent":"%","density":"Densidade"}[histnorm], type='log' if logy else 'linear')
+    fig.update_yaxes(title_text=y_axis_title.get(histnorm, "Contagem"), type='log' if logy else 'linear')
 else:
     fig.update_yaxes(title_text=col_value, type='log' if logy else 'linear')
-    fig.update_xaxes(title_text={"count":"Contagem","probability":"Prob","percent":"%","density":"Densidade"}[histnorm], type='log' if logx else 'linear')
+    fig.update_xaxes(title_text=y_axis_title.get(histnorm, "Contagem"), type='log' if logx else 'linear')
 
 fig.update_layout(barmode=barmode, height=560, bargap=0.05, bargroupgap=0.02, legend_title="Grupo")
 
@@ -346,18 +373,18 @@ if rows:
 st.subheader("Exportar")
 # Dados processados (após filtros/outliers)
 out_buf = io.StringIO(); work.to_csv(out_buf, index=False)
-st.download_button("⬇️ CSV – dados processados", out_buf.getvalue(), file_name="histogram_processed.csv", mime="text/csv")
+st.download_button("⬇️ CSV — dados processados", out_buf.getvalue(), file_name="histogram_processed.csv", mime="text/csv")
 
 # Figura principal
 html = pio.to_html(fig, include_plotlyjs='cdn', full_html=False)
-st.download_button("⬇️ HTML interativo – histograma", data=html, file_name="histogram.html")
+st.download_button("⬇️ HTML interativo — histograma", data=html, file_name="histogram.html")
 
 png_ok = st.checkbox("Exportar PNG (requer 'kaleido')", value=False)
 if png_ok:
     try:
         import kaleido  # noqa: F401
         png_bytes = pio.to_image(fig, format='png', scale=2)
-        st.download_button("⬇️ PNG – histograma", data=png_bytes, file_name="histogram.png")
+        st.download_button("⬇️ PNG — histograma", data=png_bytes, file_name="histogram.png")
     except Exception as e:
         st.warning(f"PNG indisponível: instale 'kaleido'. Erro: {e}")
 
@@ -365,10 +392,10 @@ if png_ok:
 with st.expander("Notas & Boas Práticas"):
     st.markdown(
         """
-        - **Bins**: *Freedman–Diaconis* se adapta bem a distribuições com caudas; *Doane* ajusta melhor para assimetria (skew). 
+        - **Bins**: *Freedman—Diaconis* se adapta bem a distribuições com caudas; *Doane* ajusta melhor para assimetria (skew). 
         - **Normalização**: `count` (contagens), `probability` (probabilidade), `percent` (%), `density` (área=1).
         - **KDE**: estimativa suave da densidade; o parâmetro *bandwidth* controla o alisamento (0=auto do SciPy).
-        - **ECDF**: útil para comparar distribuições acumuladas e quantis.
+        - **ECDF**: Útil para comparar distribuições acumuladas e quantis.
         - **Outliers**: prefira winsorizar para manter tamanho amostral; use recorte por quantis quando quiser descartar valores.
         """
     )
